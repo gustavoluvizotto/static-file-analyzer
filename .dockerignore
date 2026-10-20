@@ -1,0 +1,10 @@
+.venv
+corpus
+results.jsonl
+tests
+.pytest_cache
+**/__pycache__
+**/*.egg-info
+*.jsonl
+.env
+**/.git

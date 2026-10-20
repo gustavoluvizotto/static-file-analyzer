@@ -1,0 +1,61 @@
+# Sandbox for `triage scan`: no network, read-only everything, non-root, capped
+# resources. Normally used through ./run_isolated.sh, which validates the paths and
+# writes the results file. Every ${VAR:-default} can be overridden from the
+# environment or a .env file next to this file (see .env.example).
+#
+# Direct use (results go to stdout, nothing in the container is writable):
+#   export TRIAGE_SAMPLES="$PWD/corpus"
+#   docker compose build
+#   docker compose run --rm -T triage scan /samples --rules /opt/triage/rules --out - > results.jsonl
+# With your own rules, add the overlay and point --rules at /rules:
+#   TRIAGE_RULES="$PWD/my_rules" docker compose -f docker-compose.yml -f docker-compose.rules.yml \
+#     run --rm -T triage scan /samples --rules /rules --out - > results.jsonl
+name: triage
+
+services:
+  triage:
+    image: ${TRIAGE_IMAGE:-triage:0.1.0}
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${TRIAGE_PYTHON_IMAGE:-docker.io/library/python:3.12-slim}
+        TRIAGE_UID: ${TRIAGE_UID:-10001}
+        TRIAGE_GID: ${TRIAGE_GID:-10001}
+    # Only ever run the locally built image; never pull "triage" from a registry.
+    pull_policy: never
+
+    # --- isolation ------------------------------------------------------------
+    network_mode: none                  # loopback only: no downloads, no exfiltration
+    read_only: true                     # root filesystem is read-only
+    # Empty, read-only tmpfs over the paths where Podman would otherwise mount a
+    # writable tmpfs for read_only containers. A no-op on Docker.
+    tmpfs:
+      - /tmp:ro,noexec,nosuid,nodev,size=64k
+      - /var/tmp:ro,noexec,nosuid,nodev,size=64k
+      - /run:ro,noexec,nosuid,nodev,size=64k
+    ipc: none                           # private IPC namespace, no /dev/shm
+    user: "${TRIAGE_UID:-10001}:${TRIAGE_GID:-10001}"   # non-root, same as the image
+    cap_drop: [ALL]                     # no Linux capabilities
+    security_opt:
+      - no-new-privileges:true          # setuid/setcap binaries cannot gain privileges
+
+    # --- resource limits ------------------------------------------------------
+    pids_limit: ${TRIAGE_PIDS:-64}      # no fork bombs
+    mem_limit: ${TRIAGE_MEMORY:-1g}     # hard RAM cap...
+    memswap_limit: ${TRIAGE_MEMORY:-1g} # ...with no swap on top
+    cpus: ${TRIAGE_CPUS:-2}
+    ulimits:
+      core: 0                           # no core dumps of memory holding sample data
+      nofile:
+        soft: 1024
+        hard: 1024
+
+    # --- data -----------------------------------------------------------------
+    # Samples are mounted read-only. TRIAGE_SELINUX=",Z" relabels for SELinux
+    # hosts (this changes the label on the host files).
+    volumes:
+      - ${TRIAGE_SAMPLES:?set TRIAGE_SAMPLES to the sample directory}:/samples:ro${TRIAGE_SELINUX:-}
+
+# podman-compose: run the container on its own, not inside a shared pod.
+x-podman:
+  in_pod: false

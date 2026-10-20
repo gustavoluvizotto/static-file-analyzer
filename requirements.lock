@@ -1,0 +1,9 @@
+certifi==2026.10.19
+charset-normalizer==3.5.2
+filelock==4.2.4
+idna==3.20
+requests==2.34.2
+requests-file==3.0.1
+tldextract==5.4.0
+urllib3==2.8.0
+yara-python==4.5.4

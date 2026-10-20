@@ -1,0 +1,7 @@
+# Overlay for docker-compose.yml: mount your own rules directory read-only at
+# /rules. Use with `-f docker-compose.yml -f docker-compose.rules.yml` and pass
+# `--rules /rules` to `triage scan`. run_isolated.sh -r DIR does this for you.
+services:
+  triage:
+    volumes:
+      - ${TRIAGE_RULES:?set TRIAGE_RULES to the rules directory}:/rules:ro${TRIAGE_SELINUX:-}

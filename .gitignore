@@ -1,0 +1,21 @@
+# Python environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Generated test corpus (rebuild with: python make_corpus.py)
+corpus/
+
+# Scan results, and the temp files run_isolated.sh writes before renaming
+*.jsonl
+*.jsonl.*
+
+# Local compose overrides (copy of .env.example)
+.env
+
+# macOS
+.DS_Store
