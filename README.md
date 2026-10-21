@@ -100,28 +100,26 @@ With more than one pass, the first pass records a SHA-256 of every sample, about
 disappeared, `test-rules` stops with exit code 1 instead of reporting results that
 mix two versions of the corpus.
 
-## Running isolated (Docker or Podman)
+## Running isolated (Podman)
 
 The sandbox is defined in [docker-compose.yml](docker-compose.yml): no network,
 read-only filesystem, samples mounted read-only, non-root user, capped resources.
-`run_isolated.sh` is a thin wrapper around it and works only through compose:
-`docker compose` for Docker, `podman compose` for Podman (backed by docker-compose
-or podman-compose). The wrapper:
+`run_isolated.sh` runs it with `podman compose`, which delegates to docker-compose
+or podman-compose (whichever podman is configured to use). The script:
 
 1. Checks the paths.
-2. Builds the image with compose (cached builds take seconds, so the image always
-   matches the source).
+2. Builds the image (cached builds take seconds, so the image always matches the
+   source).
 3. Runs `python -m triage.sandbox_check` in the same service, and refuses to scan
    unless every sandbox setting is in effect.
 4. Runs the scan and writes the results file.
 
 ```bash
-./run_isolated.sh corpus results.jsonl                 # docker compose (default engine)
-./run_isolated.sh -e podman corpus results.jsonl       # podman compose (or CONTAINER_ENGINE=podman)
+./run_isolated.sh corpus results.jsonl                 # scan with the rules in the image
 ./run_isolated.sh -r my_rules corpus results.jsonl     # your own rules, mounted read-only
 ./run_isolated.sh corpus results.jsonl -- --max-size-mb 10 --strict   # extra scan args
-./run_isolated.sh --dry-run corpus results.jsonl       # print the compose commands, run nothing
 ./run_isolated.sh --no-build corpus results.jsonl      # skip the build step
+./run_isolated.sh --selinux-relabel corpus results.jsonl   # SELinux hosts (Fedora, RHEL)
 ```
 
 The scan writes JSONL to the container's stdout, and the script saves it to the
@@ -146,7 +144,9 @@ the environment or in a `.env` file next to the compose file (copy
 | `TRIAGE_SAMPLES` | required | sample directory (absolute path); set by the script |
 | `TRIAGE_RULES` | required by the overlay | rules directory for `docker-compose.rules.yml`; set by `-r` |
 | `TRIAGE_SELINUX` | empty | `,Z` to relabel mounts on SELinux hosts; set by `--selinux-relabel` |
-| `TRIAGE_COMPOSE` | `docker compose` / `podman compose` | compose command for the script, e.g. `docker-compose`, `podman-compose` |
+
+The compose provider is podman's own setting: `PODMAN_COMPOSE_PROVIDER`, or
+`compose_providers` in `containers.conf`.
 
 Files:
 - `docker-compose.yml`: build arguments and every runtime setting.
@@ -157,32 +157,31 @@ Files:
 
 ```bash
 export TRIAGE_SAMPLES="$PWD/corpus"          # absolute path to an existing directory
-docker compose build                         # or: podman compose build / podman-compose build
-docker compose run --rm -T --entrypoint python triage -m triage.sandbox_check
-docker compose run --rm -T triage scan /samples --rules /opt/triage/rules --out - > results.jsonl
+podman compose build
+podman compose run --rm -T --entrypoint python triage -m triage.sandbox_check
+podman compose run --rm -T triage scan /samples --rules /opt/triage/rules --out - > results.jsonl
 
 # with your own rules
-TRIAGE_RULES="$PWD/my_rules" docker compose -f docker-compose.yml -f docker-compose.rules.yml \
+TRIAGE_RULES="$PWD/my_rules" podman compose -f docker-compose.yml -f docker-compose.rules.yml \
   run --rm -T triage scan /samples --rules /rules --out - > results.jsonl
 ```
 
 `-T` disables the pseudo-terminal so stdout carries only JSONL. Two cautions apply
 when you skip the script:
-- **Missing paths:** if `TRIAGE_SAMPLES` doesn't exist, Docker **creates it on the
-  host** (as root with rootful Docker), because compose's short volume syntax implies
-  `create_host_path`. The script checks the paths first. The short syntax is kept
-  because it is the only form that supports optional SELinux relabeling the same way
-  in docker-compose and podman-compose.
-- **Silently dropped settings:** podman-compose 1.5.0 ignores `ipc` and
-  `memswap_limit` (see below). Run `sandbox_check` before scanning.
+- **Missing paths:** if `TRIAGE_SAMPLES` doesn't exist, both providers **create it on
+  the host**, because compose's short volume syntax implies `create_host_path`. The
+  script checks the paths first. The short syntax is kept because it is the only form
+  that supports optional SELinux relabeling the same way in docker-compose and
+  podman-compose.
+- **Silently dropped settings:** with the podman-compose provider, `ipc` and
+  `memswap_limit` are ignored (see below). Run `sandbox_check` before scanning.
 
-### Compose implementations
+### Compose providers
 
-| Command | How the script uses it | Result |
+| Provider behind `podman compose` | What the script does | Result |
 |---|---|---|
-| `docker compose` / `docker-compose` | used as is | all settings honored (tested: docker-compose v2.29.1 against Podman's Docker API) |
-| `podman compose` → docker-compose | used as is | all settings honored |
-| `podman compose` → podman-compose, or `podman-compose` directly | detected; the script adds `--podman-run-args="--ipc=none --memory-swap=<memswap_limit>"` | 1.5.0 drops `ipc` and `memswap_limit` without warning; with the added args all checks pass |
+| docker-compose (v2.29.1 tested) | nothing extra | all settings honored |
+| podman-compose (1.5.0 tested) | detects it and adds `--podman-run-args="--ipc=none --memory-swap=<memswap_limit>"` | 1.5.0 drops `ipc` and `memswap_limit` without warning; with the added args all checks pass |
 
 Without the added arguments, podman-compose leaves `/dev/shm` writable and allows
 1 GB of swap. `sandbox_check` catches both, and the script refuses to scan.
@@ -202,14 +201,14 @@ The image ([Dockerfile](Dockerfile)) is a two-stage build:
 
 All settings below are in `docker-compose.yml`. `sandbox_check` verifies them from
 inside the container before every scan: Podman 6.1.4 (rootless, cgroups v2, SELinux)
-passes all 11 checks through both docker-compose and podman-compose.
+passes all 11 checks with both providers.
 
 | Compose setting | Protects against |
 |---|---|
 | `network_mode: none` | The container has only a loopback interface. Content in a sample, or a compromised scanner, cannot download anything, reach a C2 server, or send sample data or results out. |
 | `read_only: true` | The container's root filesystem is read-only. A compromised process cannot plant files, change the scanner or rules, or leave anything behind for a later run. Python bytecode is precompiled in the image, so nothing needs writing. |
-| `tmpfs: /tmp, /var/tmp, /run` mounted `ro` | Podman mounts writable tmpfs on these paths for read-only containers, and compose has no setting to turn that off. Mounting empty, read-only tmpfs there first leaves nothing writable on either engine. |
-| `ipc: none` | Gives the container its own IPC namespace with no `/dev/shm`, which both engines otherwise mount writable. Removes the last scratch space and any shared-memory channel. |
+| `tmpfs: /tmp, /var/tmp, /run` mounted `ro` | Podman mounts writable tmpfs on these paths for read-only containers, and compose has no setting to turn that off. Mounting empty, read-only tmpfs there first leaves nothing writable. |
+| `ipc: none` | Gives the container its own IPC namespace with no `/dev/shm`, which Podman otherwise mounts writable. Removes the last scratch space and any shared-memory channel. |
 | `volumes: …:/samples:ro` | The samples are visible but cannot be changed, deleted or encrypted. The original evidence stays intact. |
 | `user: 10001:10001` (and `USER` in the image) | The scanner never runs as root, even if the image's `USER` is overridden. Root in a container is much closer to root on the host: it is the same UID unless user namespaces are used. |
 | `cap_drop: [ALL]` | Removes every Linux capability (e.g. `CAP_CHOWN`, `CAP_NET_RAW`, `CAP_DAC_OVERRIDE`, `CAP_SYS_CHROOT`) from the default set. A compromised process cannot use them, which shrinks the kernel attack surface for escapes. |
@@ -221,23 +220,23 @@ passes all 11 checks through both docker-compose and podman-compose.
 | `ulimits: nofile: 1024` | Bounds open file descriptors. The scanner needs about 70 at most (64 nested directories plus a few files). |
 | `pull_policy: never` | Runs only the image you built locally. A typo or a registry entry named `triage` can never be pulled and run in its place. |
 | `run --rm` | Removes the container after the run, so no stopped container with sample-derived state lingers. |
-| `x-podman: in_pod: false` | podman-compose would otherwise put the container in a shared pod. Docker compose ignores `x-` keys. |
+| `x-podman: in_pod: false` | podman-compose would otherwise put the container in a shared pod. docker-compose ignores `x-` keys. |
 
-Both engines also apply their default seccomp profile (restricts system calls) and
+Podman also applies its default seccomp profile (restricts system calls) and
 AppArmor/SELinux confinement where the host has it. Nothing here disables them.
 
-### Docker vs. Podman notes
+### Podman notes
 
-- **Rootless Podman** (the default for podman) runs everything in a user namespace,
-  so container UID 10001 maps to an unprivileged subordinate UID on the host. With
-  **rootful Docker**, UID 10001 is UID 10001 on the host, which is still non-root.
-- **macOS and Windows:** both engines run containers inside a Linux VM (Docker
-  Desktop, `podman machine`). The sample directory must be shared with that VM;
-  Podman shares `/Users` by default.
+- **Rootless Podman** (the default) runs everything in a user namespace, so
+  container UID 10001 maps to an unprivileged subordinate UID on the host. With
+  rootful Podman, UID 10001 is UID 10001 on the host, which is still non-root.
+- **macOS and Windows:** Podman runs containers inside a Linux VM (`podman machine`).
+  The sample directory must be shared with that VM; on macOS `/Users` is shared by
+  default.
 - **File permissions:** the scanner runs as UID 10001, so it can read only files
   readable by "others" (e.g. mode 644). Other files are reported as skipped with
   `file is root protected`. To scan such files, make a world-readable copy.
-- **macOS file-sharing quirk:** inside Docker Desktop or `podman machine`, an
+- **macOS file-sharing quirk:** inside `podman machine`, an
   unreadable (e.g. mode 000) file may be reported as `vanished` or `read_error`
   instead of `permission_denied`. The VM's file-sharing layer (virtiofs) gives
   inconsistent errors for such files. The file is still skipped safely. Native
@@ -246,15 +245,19 @@ AppArmor/SELinux confinement where the host has it. Nothing here disables them.
   `--selinux-relabel` (or set `TRIAGE_SELINUX=,Z`), which adds `:Z`. This **changes
   the SELinux label of the host files**, the only host-side change the script can
   make. Use it only where needed.
-- **`docker-credential-desktop` not found** when building with docker-compose: your
-  `~/.docker/config.json` names a credential helper that is not installed (often
-  left behind by an uninstalled Docker Desktop). Remove its `"credsStore"` line, or
-  build with `DOCKER_CONFIG` pointing at a directory without it.
+- **`docker-credential-desktop` not found** when building with the docker-compose
+  provider: it reads `~/.docker/config.json`, which names a credential helper that is
+  not installed (often left behind by an uninstalled Docker Desktop). Remove its
+  `"credsStore"` line, or build with `DOCKER_CONFIG` pointing at a directory without it.
+- **`Cannot connect to the Docker daemon`** with the docker-compose provider: a
+  `DOCKER_HOST` set in your shell takes precedence over the socket `podman compose`
+  would choose. Unset it, or point it at the machine's API socket:
+  `export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"`.
 
 ### What the container does not protect against
 
 - **Kernel exploits.** Containers share the host kernel. For real, untrusted malware,
-  use a VM or a sandboxed runtime such as gVisor (`--runtime=runsc` with Docker).
+  use a VM or a sandboxed runtime such as gVisor (`podman --runtime=runsc`).
 - **Forged results.** The JSONL comes out of the sandbox. A compromised scanner
   could write misleading results, so treat the output as untrusted data.
 - **Long runs.** There is no wall-clock timeout. YARA has a per-file timeout of 10
@@ -347,7 +350,7 @@ commands end to end on a generated corpus.
 
 ```
 make_corpus.py            synthetic corpus generator
-run_isolated.sh           sandboxed scan: build, verify sandbox, scan
+run_isolated.sh           sandboxed scan with podman compose: build, verify, scan
 docker-compose.yml        sandbox settings, limits and build arguments
 docker-compose.rules.yml  overlay: mount your own rules read-only
 .env.example              template for overriding compose parameters

@@ -5,10 +5,10 @@
 #
 # Direct use (results go to stdout, nothing in the container is writable):
 #   export TRIAGE_SAMPLES="$PWD/corpus"
-#   docker compose build
-#   docker compose run --rm -T triage scan /samples --rules /opt/triage/rules --out - > results.jsonl
+#   podman compose build
+#   podman compose run --rm -T triage scan /samples --rules /opt/triage/rules --out - > results.jsonl
 # With your own rules, add the overlay and point --rules at /rules:
-#   TRIAGE_RULES="$PWD/my_rules" docker compose -f docker-compose.yml -f docker-compose.rules.yml \
+#   TRIAGE_RULES="$PWD/my_rules" podman compose -f docker-compose.yml -f docker-compose.rules.yml \
 #     run --rm -T triage scan /samples --rules /rules --out - > results.jsonl
 name: triage
 
@@ -28,7 +28,7 @@ services:
     network_mode: none                  # loopback only: no downloads, no exfiltration
     read_only: true                     # root filesystem is read-only
     # Empty, read-only tmpfs over the paths where Podman would otherwise mount a
-    # writable tmpfs for read_only containers. A no-op on Docker.
+    # writable tmpfs for read_only containers (compose has no read_only_tmpfs key).
     tmpfs:
       - /tmp:ro,noexec,nosuid,nodev,size=64k
       - /var/tmp:ro,noexec,nosuid,nodev,size=64k

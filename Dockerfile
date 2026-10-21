@@ -1,6 +1,6 @@
 # Container image for `triage`. Build arguments and runtime sandbox settings are
-# defined in docker-compose.yml; build with `docker compose build` (or
-# `podman compose build`) and run scans through run_isolated.sh.
+# defined in docker-compose.yml; build with `podman compose build` and run scans
+# through run_isolated.sh.
 #
 # Build arguments (defaults below, overridden from docker-compose.yml):
 #   PYTHON_IMAGE  base image; pin by digest for reproducible builds, e.g.

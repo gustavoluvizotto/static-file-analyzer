@@ -16,6 +16,6 @@ corpus/
 
 # Local compose overrides (copy of .env.example)
 .env
-
+.python-version
 # macOS
 .DS_Store
